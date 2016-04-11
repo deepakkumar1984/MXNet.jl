@@ -241,5 +241,29 @@ function normalized_gradient(opts::AbstractOptimizerOptions, state::Optimization
   return grad
 end
 
+#=doc
+.. function:: init_cc_optimizer(name, param_keys, param_vals)
+   :param AbstractString name: name of the optimizer registered with MXNET_REGISTER_OPTIMIZER
+
+   Initialize handle to C++ optimizer
+=#
+function init_cc_optimizer(name :: AbstractString; kwargs...)
+  creator = Ref{MX_handle}()
+  @mxcall(:MXOptimizerFindCreator, (Cstring, Ref{MX_handle}), name, creator)
+
+  if creator[] == C_NULL
+    error("Cannot find c++ implementation of optimizer registered with name $name")
+  end
+
+  arg_keys = AbstractString[string(k)        for (k,v) in kwargs]
+  arg_vals = AbstractString[dump_mx_param(v) for (k,v) in kwargs]
+
+  handle = Ref{MX_handle}()
+  @mxcall(:MXOptimizerCreateOptimizer, (MX_handle, MX_uint, char_pp, char_pp,
+          Ref{MX_handle}), creator[], length(arg_keys), arg_keys, arg_vals, handle)
+  return handle[]
+end
+
 include("optimizers/sgd.jl")
+include("optimizers/ccsgd.jl")
 include("optimizers/adam.jl")
