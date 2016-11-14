@@ -1,9 +1,11 @@
+module Module
+
 """
     AbstractModule
 
 A module represnets a computation component. The design purpose of a module is
 that abstracts a computation unit, that one can run forward, backward, update parameters, etc.
-We aim to make the APIs easy to use, especially in the case when we need to use 
+We aim to make the APIs easy to use, especially in the case when we need to use
 an imperative API to work with multiple modules (e.g. stochastic depth networks).
 
 A module has several states:
@@ -63,7 +65,7 @@ abstract AbstractModule
 
 ##
 # Names
-## 
+##
 """
     data_names(self::AbstractModule) -> Vector{Symbol}
 """
@@ -80,7 +82,7 @@ end
 
 ##
 # State information
-## 
+##
 
 """
     isbinded(self::AbstractModule) -> Bool
@@ -112,7 +114,7 @@ end
 
 ##
 #  Input/Output information
-## 
+##
 
 """
 """
@@ -275,3 +277,7 @@ function forward_backward(self :: AbstractModule, data_batch)
   backward(self, data_batch)
 end
 
+# include implementations
+include("symbol_module.jl")
+
+end
