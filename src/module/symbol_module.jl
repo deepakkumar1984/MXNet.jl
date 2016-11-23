@@ -5,6 +5,8 @@
 Module is a basic module that wraps a `SymbolicNode`. It is functionally the same
 as the `FeedForward` model, except using the module API.
 
+A current limitation is that it only supports one context.
+
 # Parameters
 * `symbol :: SymbolicNode`: The wrapped `SymbolicNode`
 * `data_names :: Vector{Symbol}`:
@@ -13,7 +15,8 @@ type Module <: AbstractModule
   symbol :: SymbolicNode
   data_names :: Vector{Symbol}
   label_names :: Vector{Symbol}
-  context :: Vector{Context}
+  aux_names :: Vector{Symbol}
+  context :: Context
 
   binded :: Bool
   for_training :: Bool
@@ -21,29 +24,32 @@ type Module <: AbstractModule
   params_initialized :: Bool
   optimizer_initialized :: Bool
 
-  data_shapes :: Nullable{Dict{Symbol, Vector{Int}}}
-  label_shapes :: Nullable{Dict{Symbol, Vector{Int}}}
-  output_shapes :: Nullable{Dict{Symbol, Vector{Int}}}
+  data_shapes :: Nullable{Vector{Tuple{Int}}}
+  label_shapes :: Nullable{Vector{Tuple{Int}}}
+  output_shapes :: Nullable{Vector{Tuple{Int}}}
 
-  arg_params :: Nullable{Dict{Symbol, NDArray}}
-  aux_params :: Nullable{Dict{Symbol, NDArray}}
+  arg_arrays :: Nullable{Vector{NDArray}}
+  aux_arrays :: Nullable{Vector{NDArray}}
+  grad_arrays :: Nullable{Vector{NDArray}}
   params_dirty :: Bool
 
-  executor :: Executor
+  executor :: Nullable{Executor}
 
   function Module(symbol::SymbolicNode, data_names::Vector{Symbol},
-                  label_names::Vector{Symbol}, context :: Vector{Context})
-    return new(symbol, data_names, label_names, context,
-               false, false, false, false, false,
-               Nullable{Dict{Symbol, Vector{Int}}}(),
-               Nullable{Dict{Symbol, Vector{Int}}}(),
-               Nullable{Dict{Symbol, Vector{Int}}}(), false)
-  end
-end
+                  label_names::Vector{Symbol}, context :: Context)
 
-function Module(symbol::SymbolicNode, data_names::Vector{Symbol},
-                label_names::Vector{Symbol}, context :: Context)
-  return Module(symbol, data_names, label_names, [context])
+    aux_names = list_auxiliary_states(symbol)
+    return new(symbol, data_names, label_names, aux_names, context,
+               false, false, false, false, false,
+               Nullable{Vector{Tuple{Int}}}(),
+               Nullable{Vector{Tuple{Int}}}(),
+               Nullable{Vector{Tuple{Int}}}(),
+               Nullable{Vector{NDArray}}(),
+               Nullable{Vector{NDArray}}(),
+               Nullable{Vector{NDArray}}(),
+               false,
+               Nullable{Executor}())
+  end
 end
 
 function Module(symbol::SymbolicNode;
@@ -62,17 +68,17 @@ data_names(self::Module) = self.data_names
 output_names(self::Module) = list_outputs(symbol)
 
 function data_shapes(self::Module)
-  !isbinded(self) && return Nullable{Dict{Symbol, Vector{Int}}}()
+  !isbinded(self) && return Nullable{Vector{Tuple{Int}}}()
   return self.data_shapes
 end
 
 function label_shapes(self::Module)
-  !isbinded(self) && return Nullable{Dict{Symbol, Vector{Int}}}()
+  !isbinded(self) && return Nullable{Vector{Tuple{Int}}}()
   return self.label_shapes
 end
 
 function output_shapes(self::Module)
-  !isbinded(self) && return Nullable{Dict{Symbol, Vector{Int}}}()
+  !isbinded(self) && return Nullable{Vector{Tuple{Int}}}()
   return self.output_shapes
 end
 
@@ -83,7 +89,8 @@ function get_params(self::Module)
   if self.params_dirty
     sync_params_from_device(self)
   end
-  return (self.arg_params, self.aux_params)
+  return (Dict(name => data for (name, data) in zip()),
+          Dict(name => data for (name, data) in zip()))
 end
 
 function init_params(self::Module; initializer=, arg_params=nothing,
@@ -95,7 +102,7 @@ function init_params(self::Module; initializer=, arg_params=nothing,
   @assert isbinded(self) "Call `bind` before initialization"
 end
 
-function bind(self::Module, data_shapes, label_shapes = nothing;
+function bind(self::Module, data_shapes, label_shapes = Vector{Vector{Int}}();
               for_training=true, inputs_need_grad=true, force_rebind=false,
               grad_req=GRAD_WRITE)
   if force_rebind
@@ -113,17 +120,48 @@ function bind(self::Module, data_shapes, label_shapes = nothing;
 
   @assert !for_training && !inputs_need_grad
 
+  @assert length(self.data_names)  == length(data_shapes)
+  @assert length(self.label_names) == length(label_shapes)
+
   self.data_shapes = Nullable(data_shapes)
-  if label_shapes === nothing
-    self.label_shapes = Nullable{Dict{Symbol, Vector{Int}}}()
-  else
-    self.label_shapes = Nullable(label_shapes)
+  self.label_shapes = Nullable(label_shapes)
+
+  provided_shapes = merge(
+      Dict(name => shape for zip(self.data_names,  data_shapes)),
+      Dict(name => shape for zip(self.label_names, label_shapes)))
+
+  arg_shapes, out_shapes, aux_shapes = infer_shape(self; provided_shapes...)
+  @assert(!isa(arg_shapes, Void), "Information not enough to perform complete shape inference")
+
+  # TODO: perform type inference
+
+  arg_arrays = NDArray[mx.zeros(shape, ctx) for shape in arg_shapes]
+  arg_names  = list_arguments(self.symbol)
+
+  grad_arrays = Dict{Symbol,NDArray}()
+
+  if grad_req != GRAD_NOP
+    shapes = zip(arg_names, arg_shapes)
+
+    # if not in provided data, should be parameters
+    provided_data_names = [x[1] for x in keys(provided_shapes)]
+    shapes = filter(x -> !in(x[1], provided_data_names), shapes)
+
+    # Remove all gradients for nop params
+    # if isa(grad_req, Dict{Symbol, GRAD_REQ})
+    #  shapes = filter(x -> grad_req[x[1]] != GRAD_NOP,shapes)
+    # end
+
+    for (name, shape) in shapes
+      grad_arrays[name] = mx.zeros(shape, ctx)
+    end
   end
 
+  aux_arrays = NDArray[mx.zeros(shape, ctx) for shape in aux_shapes]
+  executor = mx.bind(self, ctx, arg_arrays, args_grad=grad_arrays, grad_req=grad_req, aux_states=aux_arrays)
 
+  self.executor = Nullable{Executor}(executor)
 end
-
-
 
 ##
 # Internals
