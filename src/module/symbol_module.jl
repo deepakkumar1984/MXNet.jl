@@ -1,3 +1,5 @@
+import ....MXNet: mx # in order to use mx.
+import ..mx: SymbolicNode, NDArray, Context, Executor
 
 """
     Module
@@ -11,7 +13,7 @@ A current limitation is that it only supports one context.
 * `symbol :: SymbolicNode`: The wrapped `SymbolicNode`
 * `data_names :: Vector{Symbol}`:
 """
-type Module <: AbstractModule
+type SymbolModule <: AbstractModule
   symbol :: SymbolicNode
   data_names :: Vector{Symbol}
   label_names :: Vector{Symbol}
@@ -35,10 +37,10 @@ type Module <: AbstractModule
 
   executor :: Nullable{Executor}
 
-  function Module(symbol::SymbolicNode, data_names::Vector{Symbol},
+  function SymbolModule(symbol::SymbolicNode, data_names::Vector{Symbol},
                   label_names::Vector{Symbol}, context :: Context)
 
-    aux_names = list_auxiliary_states(symbol)
+    aux_names = mx.list_auxiliary_states(symbol)
     return new(symbol, data_names, label_names, aux_names, context,
                false, false, false, false, false,
                Nullable{Vector{Tuple{Int}}}(),
@@ -52,37 +54,37 @@ type Module <: AbstractModule
   end
 end
 
-function Module(symbol::SymbolicNode;
+function SymbolModule(symbol::SymbolicNode;
                 data_names = [:data], label_names = [:softmax_label],
                 context = mx.cpu())
-  return Module(symbol, data_names, label_names, context)
+  return SymbolModule(symbol, data_names, label_names, context)
 end
 
 ### default API
-isbinded(self::Module) = self.binded
-allows_training(self::Module) = self.for_training
-isinitialized(self::Module) = self.params_initialized
-hasoptimizer(self::Module) = self.hasoptimizer
+isbinded(self::SymbolModule) = self.binded
+allows_training(self::SymbolModule) = self.for_training
+isinitialized(self::SymbolModule) = self.params_initialized
+hasoptimizer(self::SymbolModule) = self.hasoptimizer
 
-data_names(self::Module) = self.data_names
-output_names(self::Module) = list_outputs(symbol)
+data_names(self::SymbolModule) = self.data_names
+output_names(self::SymbolModule) = list_outputs(symbol)
 
-function data_shapes(self::Module)
+function data_shapes(self::SymbolModule)
   !isbinded(self) && return Nullable{Vector{Tuple{Int}}}()
   return self.data_shapes
 end
 
-function label_shapes(self::Module)
+function label_shapes(self::SymbolModule)
   !isbinded(self) && return Nullable{Vector{Tuple{Int}}}()
   return self.label_shapes
 end
 
-function output_shapes(self::Module)
+function output_shapes(self::SymbolModule)
   !isbinded(self) && return Nullable{Vector{Tuple{Int}}}()
   return self.output_shapes
 end
 
-function get_params(self::Module)
+function get_params(self::SymbolModule)
   if !(isbinded(self) && isinitialized(self))
     return (Nullable{Dict{Symbol, NDArray}}(), Nullable{Dict{Symbol, NDArray}}())
   end
@@ -93,7 +95,7 @@ function get_params(self::Module)
           Dict(name => data for (name, data) in zip()))
 end
 
-function init_params(self::Module; initializer=, arg_params=nothing,
+function init_params(self::SymbolModule; initializer=nothing, arg_params=nothing,
                      aux_params=nothing, allow_missing=false, force_init=false)
   if isinitialized(self) && !force_init
     return
@@ -102,9 +104,9 @@ function init_params(self::Module; initializer=, arg_params=nothing,
   @assert isbinded(self) "Call `bind` before initialization"
 end
 
-function bind(self::Module, data_shapes, label_shapes = Vector{Vector{Int}}();
+function bind(self::SymbolModule, data_shapes, label_shapes = Vector{Typle{Int}}();
               for_training=true, inputs_need_grad=true, force_rebind=false,
-              grad_req=GRAD_WRITE)
+              grad_req=mx.GRAD_WRITE)
   if force_rebind
     reset_bind(self)
   end
@@ -118,7 +120,7 @@ function bind(self::Module, data_shapes, label_shapes = Vector{Vector{Int}}();
   self.inputs_need_grad = inputs_need_grad
   self.binded = true
 
-  @assert !for_training && !inputs_need_grad
+  #@assert !for_training && !inputs_need_grad
 
   @assert length(self.data_names)  == length(data_shapes)
   @assert length(self.label_names) == length(label_shapes)
@@ -127,8 +129,8 @@ function bind(self::Module, data_shapes, label_shapes = Vector{Vector{Int}}();
   self.label_shapes = Nullable(label_shapes)
 
   provided_shapes = merge(
-      Dict(name => shape for zip(self.data_names,  data_shapes)),
-      Dict(name => shape for zip(self.label_names, label_shapes)))
+      Dict(name => shape for (name, shape) in zip(self.data_names,  data_shapes)),
+      Dict(name => shape for (name, shape) in zip(self.label_names, label_shapes)))
 
   arg_shapes, out_shapes, aux_shapes = infer_shape(self; provided_shapes...)
   @assert(!isa(arg_shapes, Void), "Information not enough to perform complete shape inference")
@@ -167,6 +169,6 @@ end
 # Internals
 ##
 
-function sync_params_from_devices(self::Module)
+function sync_params_from_devices(self::SymbolModule)
   throw(MethodError(sync_params_from_devices, (self,)))
 end
